@@ -24,14 +24,32 @@ def _terms(value):
     return [item.casefold().strip() for item in value if isinstance(item, str) and item.strip()]
 
 
+def _contains(text, term):
+    return re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text, flags=re.IGNORECASE) is not None
+
+
 def _money(value):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     if not isinstance(value, str):
         return None
-    cleaned = value.replace(".", "").replace(",", ".")
-    match = re.search(r"\d+(?:\.\d+)?", cleaned)
-    return float(match.group()) if match else None
+    match = re.search(r"\d[\d.,]*", value)
+    if not match:
+        return None
+    token = match.group()
+    if "," in token and "." in token:
+        if token.rfind(",") > token.rfind("."):
+            token = token.replace(".", "").replace(",", ".")
+        else:
+            token = token.replace(",", "")
+    elif "," in token:
+        token = token.replace(",", "") if len(token.rsplit(",", 1)[1]) == 3 else token.replace(",", ".")
+    elif "." in token and len(token.rsplit(".", 1)[1]) == 3 and token.count(".") == 1:
+        token = token.replace(".", "")
+    try:
+        return float(token)
+    except ValueError:
+        return None
 
 
 def _level(score):
@@ -57,8 +75,8 @@ def score_job(job, config, metadata=None):
     work_types = _terms(config.get("preferred_work_types", []))
     languages = _terms(config.get("preferred_languages", []))
     locations = _terms(config.get("preferred_locations", []))
-    matched_title = [term for term in keywords if term in title_text]
-    matched_body = [term for term in keywords if term in text and term not in matched_title]
+    matched_title = [term for term in keywords if _contains(title_text, term)]
+    matched_body = [term for term in keywords if _contains(text, term) and term not in matched_title]
     reasons = []
     earned = 0.0
     possible = 0.0
@@ -79,7 +97,7 @@ def score_job(job, config, metadata=None):
     # Tipo de trabalho: preferência explícita, sem exigir uma categoria inventada.
     if work_types:
         possible += 15
-        matched_types = [kind for kind in work_types if kind in text]
+        matched_types = [kind for kind in work_types if _contains(text, kind)]
         type_points = 15 if matched_types else 0
         earned += type_points
         reasons.append(
@@ -104,14 +122,14 @@ def score_job(job, config, metadata=None):
     # Idioma e localização só são avaliados quando o perfil tem preferência configurada.
     if languages:
         possible += 10
-        matched_languages = [item for item in languages if item in text]
+        matched_languages = [item for item in languages if _contains(text, item)]
         language_points = 10 if matched_languages else 0
         earned += language_points
         reasons.append(f"Idioma preferencial identificado (+{language_points} pontos)" if matched_languages else "Idioma preferencial não identificado")
     if locations:
         possible += 10
         location_text = f"{location} {text}".casefold()
-        matched_locations = [item for item in locations if item in location_text]
+        matched_locations = [item for item in locations if _contains(location_text, item)]
         location_points = 10 if matched_locations else 0
         earned += location_points
         reasons.append(f"Localização compatível (+{location_points} pontos)" if matched_locations else "Localização preferencial não identificada")

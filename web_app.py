@@ -36,10 +36,12 @@ def read_jobs(query="", source="", location="", min_score=0, limit=500):
         clauses.append("score >= ?")
         params.append(min_score)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    limit_sql = " LIMIT ?" if limit is not None else ""
+    query_params = [*params, limit] if limit is not None else params
     with get_connection() as connection:
         rows = connection.execute(
-            f"SELECT id, source, title, company, location, url, found_at, score, score_level, score_reasons FROM jobs {where} ORDER BY score DESC, found_at DESC LIMIT ?",
-            [*params, limit],
+            f"SELECT id, source, title, company, location, url, found_at, score, score_level, score_reasons FROM jobs {where} ORDER BY score DESC, found_at DESC{limit_sql}",
+            query_params,
         ).fetchall()
     result = []
     for row in rows:
@@ -65,13 +67,13 @@ def current_filters():
     }
 
 
-def filtered_jobs():
+def filtered_jobs(limit=500):
     filters = current_filters()
-    return read_jobs(**filters)
+    return read_jobs(**filters, limit=limit)
 
 
 def report_rows():
-    rows = filtered_jobs()
+    rows = filtered_jobs(limit=None)
     for row in rows:
         try:
             row["found_at_display"] = datetime.fromisoformat(row["found_at"]).astimezone().strftime("%d/%m/%Y %H:%M")
@@ -111,7 +113,10 @@ def refresh():
 
 @app.get("/config")
 def config_page():
-    return render_template("config.html", config=agent.load_config())
+    config = agent.load_config()
+    telegram_configured = bool(config.get("telegram_bot_token") and config.get("telegram_chat_id"))
+    safe_config = {**config, "telegram_bot_token": ""}
+    return render_template("config.html", config=safe_config, telegram_configured=telegram_configured)
 
 
 def optional_number(value):
@@ -132,10 +137,12 @@ def update_config():
             "preferred_locations": [x.strip() for x in request.form.get("preferred_locations", "").split(",") if x.strip()],
             "budget_min": optional_number(request.form.get("budget_min", "")),
             "budget_max": optional_number(request.form.get("budget_max", "")),
-            "telegram_bot_token": request.form.get("telegram_bot_token", "").strip(),
             "telegram_chat_id": request.form.get("telegram_chat_id", "").strip(),
             "desktop_notifications": request.form.get("desktop_notifications") == "on",
         }
+        token = request.form.get("telegram_bot_token", "").strip()
+        if token:
+            updates["telegram_bot_token"] = token
         agent.save_config(updates)
         flash("Configuração salva.", "success")
     except (ValueError, RuntimeError) as exc:

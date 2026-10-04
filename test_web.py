@@ -58,6 +58,16 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(self.client.get("/health").json["status"], "ok")
         self.assertEqual(self.client.get("/api/jobs").json["count"], 1)
 
+    def test_config_page_does_not_render_telegram_token(self):
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["telegram_bot_token"] = "token-super-secreto"
+        config["telegram_chat_id"] = "123"
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        response = self.client.get("/config")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"token-super-secreto", response.data)
+        self.assertIn("Token já configurado".encode(), response.data)
+
 
 if __name__ == "__main__":
     unittest.main()

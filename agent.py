@@ -1,5 +1,6 @@
 import html
 import json
+import os
 import re
 import sqlite3
 import time
@@ -44,6 +45,7 @@ def load_config():
     """Carrega a configuração, preenchendo campos ausentes com os valores padrão."""
     if not CFG.exists():
         CFG.write_text(json.dumps(DEFAULT, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.chmod(CFG, 0o600)
         return DEFAULT.copy()
 
     try:
@@ -89,9 +91,30 @@ def save_config(updates):
         "preferred_work_types", "preferred_languages", "preferred_locations", "budget_min", "budget_max",
         "telegram_bot_token", "telegram_chat_id", "desktop_notifications",
     }
-    current.update({key: value for key, value in updates.items() if key in allowed})
+    candidate = {**current, **{key: value for key, value in updates.items() if key in allowed}}
+    for key in ("keywords_any", "exclude_keywords", "preferred_work_types", "preferred_languages", "preferred_locations"):
+        if not isinstance(candidate[key], list) or not all(isinstance(x, str) for x in candidate[key]):
+            raise RuntimeError(f"{key} deve ser uma lista de textos.")
+    for key in ("check_every_minutes", "max_results_per_check"):
+        value = candidate[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise RuntimeError(f"{key} deve ser um número maior ou igual a zero.")
+    if candidate["max_results_per_check"] == 0:
+        raise RuntimeError("max_results_per_check deve ser maior que zero.")
+    for key in ("budget_min", "budget_max"):
+        value = candidate[key]
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+            raise RuntimeError(f"{key} deve ser um número maior ou igual a zero ou nulo.")
+    if candidate["budget_min"] is not None and candidate["budget_max"] is not None and candidate["budget_min"] > candidate["budget_max"]:
+        raise RuntimeError("budget_min não pode ser maior que budget_max.")
+    if not isinstance(candidate["desktop_notifications"], bool):
+        raise RuntimeError("desktop_notifications deve ser booleano.")
     try:
-        CFG.write_text(json.dumps(current, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary = CFG.with_name(f".{CFG.name}.tmp")
+        temporary.write_text(json.dumps(candidate, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, CFG)
+        os.chmod(CFG, 0o600)
     except OSError as exc:
         raise RuntimeError(f"Não foi possível salvar {CFG.name}: {exc}") from exc
     return load_config()
@@ -100,6 +123,9 @@ def save_config(updates):
 def init_db(connection=None):
     """Cria a tabela e adiciona colunas novas sem apagar bancos existentes."""
     connection = connection or sqlite3.connect(DB)
+    connection.execute("PRAGMA busy_timeout = 5000")
+    if connection.execute("PRAGMA journal_mode").fetchone()[0] != "memory":
+        connection.execute("PRAGMA journal_mode = WAL")
     connection.execute(
         """CREATE TABLE IF NOT EXISTS jobs(
             id TEXT PRIMARY KEY,
@@ -159,7 +185,8 @@ def normalize_job(source, item):
         metadata = {"budget": item.get("salary"), "job_type": item.get("job_types"), "tags": item.get("tags", [])}
 
     url = str(item.get("url") or "").strip()
-    if not job_id or not title or not url:
+    parsed_url = urllib.parse.urlparse(url)
+    if not job_id or not title or not url or parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         return None
     description = clean_text(item.get("description", ""))
     return str(job_id), str(title).strip(), str(company).strip(), str(location).strip(), url, description, metadata
@@ -170,7 +197,8 @@ def matching(job, cfg):
     text = f"{title} {description}".casefold()
     keywords = [k.casefold().strip() for k in cfg["keywords_any"] if k.strip()]
     excluded = [k.casefold().strip() for k in cfg["exclude_keywords"] if k.strip()]
-    return bool(keywords) and any(keyword in text for keyword in keywords) and not any(term in text for term in excluded)
+    contains = lambda term: re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text) is not None
+    return bool(keywords) and any(contains(keyword) for keyword in keywords) and not any(contains(term) for term in excluded)
 
 
 def notify(title, company, location, source, url, cfg):
@@ -215,6 +243,7 @@ def check_once(cfg, connection, fetcher=fetch_json, notifier=notify):
             if not isinstance(items, list):
                 raise RuntimeError("campo de vagas ausente ou inválido")
 
+            pending_notifications = []
             for item in items:
                 job = normalize_job(source, item)
                 if not job or not matching(job, cfg):
@@ -232,12 +261,15 @@ def check_once(cfg, connection, fetcher=fetch_json, notifier=notify):
                     ),
                 )
                 if cursor.rowcount == 1:
-                    notifier(title, company, location, source, link, cfg)
                     found += 1
+                    pending_notifications.append((title, company, location, source, link))
                     if found >= limit:
                         break
             connection.commit()
+            for title, company, location, source, link in pending_notifications:
+                notifier(title, company, location, source, link, cfg)
         except Exception as exc:
+            connection.rollback()
             print(f"Erro consultando {source}: {exc}")
     return found
 

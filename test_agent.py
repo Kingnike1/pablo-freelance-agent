@@ -26,6 +26,9 @@ class AgentTests(unittest.TestCase):
     def test_normalize_job_rejects_missing_url(self):
         self.assertIsNone(agent.normalize_job("Remotive", {"id": 1, "title": "Python"}))
 
+    def test_normalize_job_rejects_unsafe_url(self):
+        self.assertIsNone(agent.normalize_job("Remotive", {"id": 1, "title": "Python", "url": "javascript:alert(1)"}))
+
     def test_matching_is_case_insensitive_and_excludes_terms(self):
         good = agent.normalize_job("Remotive", {
             "id": 1, "title": "Python developer", "url": "https://example.com/1",
@@ -65,6 +68,16 @@ class AgentTests(unittest.TestCase):
                 cfg = agent.load_config()
             self.assertEqual(cfg["max_results_per_check"], 3)
             self.assertIn("keywords_any", cfg)
+
+    def test_save_config_rejects_invalid_update_before_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            original = {"max_results_per_check": 15}
+            path.write_text(json.dumps(original), encoding="utf-8")
+            with patch.object(agent, "CFG", path):
+                with self.assertRaises(RuntimeError):
+                    agent.save_config({"budget_min": 500, "budget_max": 100})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), original)
 
 
 if __name__ == "__main__":

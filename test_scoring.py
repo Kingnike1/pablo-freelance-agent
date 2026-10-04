@@ -1,6 +1,6 @@
 import unittest
 
-from scoring import score_job
+from scoring import _money, score_job
 
 
 class ScoringTests(unittest.TestCase):
@@ -34,6 +34,12 @@ class ScoringTests(unittest.TestCase):
         title = score_job(self.job("Python developer", "Build a useful API."), self.config)
         description = score_job(self.job("Developer", "Build a Python API."), self.config)
         self.assertGreater(title["score"], description["score"])
+
+    def test_money_parser_handles_common_formats(self):
+        self.assertEqual(_money("2500.00"), 2500)
+        self.assertEqual(_money("2,500"), 2500)
+        self.assertEqual(_money("R$ 2.500,00"), 2500)
+        self.assertEqual(_money("$60,000 - $80,000"), 60000)
 
 
 if __name__ == "__main__":

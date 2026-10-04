@@ -2,7 +2,7 @@
 
 **Versão documentada:** implementação de score no commit atual
 **Repositório:** [Kingnike1/pablo-freelance-agent](https://github.com/Kingnike1/pablo-freelance-agent)  
-**Status:** MVP funcional com agente de monitoramento, painel web local, relatórios e diagnóstico de configuração.
+**Status:** MVP funcional com agente de monitoramento, painel web local, relatórios, score explicável e primeira fase de estabilização técnica aplicada.
 
 ---
 
@@ -227,7 +227,7 @@ python3 -m unittest -v
 
 Validações já realizadas:
 
-- **13 testes automatizados aprovados**.
+- **17 testes automatizados aprovados**.
 - Compilação dos módulos Python aprovada.
 - APIs públicas verificadas com resposta JSON válida.
 - Painel web validado com HTTP 200.
