@@ -3,7 +3,6 @@ import io
 import json
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, url_for
 
@@ -20,7 +19,7 @@ def get_connection():
     return connection
 
 
-def read_jobs(query="", source="", location="", limit=500):
+def read_jobs(query="", source="", location="", min_score=0, limit=500):
     clauses = []
     params = []
     if query:
@@ -33,21 +32,42 @@ def read_jobs(query="", source="", location="", limit=500):
     if location:
         clauses.append("LOWER(location) LIKE ?")
         params.append(f"%{location.casefold()}%")
+    if min_score:
+        clauses.append("score >= ?")
+        params.append(min_score)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with get_connection() as connection:
         rows = connection.execute(
-            f"SELECT id, source, title, company, location, url, found_at FROM jobs {where} ORDER BY found_at DESC LIMIT ?",
+            f"SELECT id, source, title, company, location, url, found_at, score, score_level, score_reasons FROM jobs {where} ORDER BY score DESC, found_at DESC LIMIT ?",
             [*params, limit],
         ).fetchall()
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["score_reasons"] = json.loads(item.get("score_reasons") or "[]")
+        except json.JSONDecodeError:
+            item["score_reasons"] = []
+        result.append(item)
+    return result
+
+
+def current_filters():
+    try:
+        min_score = max(0, min(100, int(request.args.get("min_score", 0) or 0)))
+    except ValueError:
+        min_score = 0
+    return {
+        "query": request.args.get("q", "").strip(),
+        "source": request.args.get("source", "").strip(),
+        "location": request.args.get("location", "").strip(),
+        "min_score": min_score,
+    }
 
 
 def filtered_jobs():
-    return read_jobs(
-        query=request.args.get("q", "").strip(),
-        source=request.args.get("source", "").strip(),
-        location=request.args.get("location", "").strip(),
-    )
+    filters = current_filters()
+    return read_jobs(**filters)
 
 
 def report_rows():
@@ -63,25 +83,21 @@ def report_rows():
 @app.get("/")
 def dashboard():
     rows = report_rows()
+    filters = current_filters()
     with get_connection() as connection:
         total = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
         sources = [row[0] for row in connection.execute("SELECT DISTINCT source FROM jobs ORDER BY source")]
     return render_template(
-        "index.html",
-        jobs=rows,
-        total=total,
-        shown=len(rows),
-        sources=sources,
-        selected_source=request.args.get("source", ""),
-        query=request.args.get("q", ""),
-        location=request.args.get("location", ""),
-        config=agent.load_config(),
+        "index.html", jobs=rows, total=total, shown=len(rows), sources=sources,
+        selected_source=filters["source"], query=filters["query"], location=filters["location"],
+        min_score=filters["min_score"], config=agent.load_config(),
     )
 
 
 @app.get("/api/jobs")
 def api_jobs():
-    return jsonify({"count": len(filtered_jobs()), "jobs": filtered_jobs()})
+    jobs = filtered_jobs()
+    return jsonify({"count": len(jobs), "jobs": jobs})
 
 
 @app.post("/refresh")
@@ -98,6 +114,11 @@ def config_page():
     return render_template("config.html", config=agent.load_config())
 
 
+def optional_number(value):
+    value = value.strip()
+    return None if not value else float(value)
+
+
 @app.post("/config")
 def update_config():
     try:
@@ -106,6 +127,11 @@ def update_config():
             "max_results_per_check": int(request.form.get("max_results_per_check", 15)),
             "keywords_any": [x.strip() for x in request.form.get("keywords_any", "").split(",") if x.strip()],
             "exclude_keywords": [x.strip() for x in request.form.get("exclude_keywords", "").split(",") if x.strip()],
+            "preferred_work_types": [x.strip() for x in request.form.get("preferred_work_types", "").split(",") if x.strip()],
+            "preferred_languages": [x.strip() for x in request.form.get("preferred_languages", "").split(",") if x.strip()],
+            "preferred_locations": [x.strip() for x in request.form.get("preferred_locations", "").split(",") if x.strip()],
+            "budget_min": optional_number(request.form.get("budget_min", "")),
+            "budget_max": optional_number(request.form.get("budget_max", "")),
             "telegram_bot_token": request.form.get("telegram_bot_token", "").strip(),
             "telegram_chat_id": request.form.get("telegram_chat_id", "").strip(),
             "desktop_notifications": request.form.get("desktop_notifications") == "on",
@@ -125,13 +151,14 @@ def report(kind):
         return Response(json.dumps({"generated_at": timestamp, "count": len(rows), "jobs": rows}, ensure_ascii=False, indent=2), mimetype="application/json", headers={"Content-Disposition": "attachment; filename=oportunidades.json"})
     if kind == "csv":
         output = io.StringIO()
-        fieldnames = ["title", "company", "location", "source", "url", "found_at"]
+        fieldnames = ["title", "company", "location", "source", "score", "score_level", "score_reasons", "url", "found_at"]
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows({key: row.get(key, "") for key in fieldnames} for row in rows)
+        writer.writerows({**{key: row.get(key, "") for key in fieldnames}, "score_reasons": " | ".join(row.get("score_reasons", []))} for row in rows)
         return Response("\ufeff" + output.getvalue(), mimetype="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=oportunidades.csv"})
     if kind == "html":
-        return render_template("report.html", jobs=rows, generated_at=timestamp, query=request.args.get("q", ""), source=request.args.get("source", ""), location=request.args.get("location", ""))
+        filters = current_filters()
+        return render_template("report.html", jobs=rows, generated_at=timestamp, query=filters["query"], source=filters["source"], location=filters["location"], min_score=filters["min_score"])
     return jsonify({"error": "Formato inválido. Use html, csv ou json."}), 404
 
 

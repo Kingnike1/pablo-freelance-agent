@@ -9,6 +9,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scoring import score_job
+
 ROOT = Path(__file__).resolve().parent
 CFG = ROOT / "config.json"
 DB = ROOT / "opportunities.sqlite3"
@@ -27,6 +29,11 @@ DEFAULT = {
         "wordpress",
     ],
     "exclude_keywords": ["senior", "staff engineer", "lead developer", "principal"],
+    "preferred_work_types": ["frontend", "backend", "website", "landing page", "automation"],
+    "preferred_languages": [],
+    "preferred_locations": [],
+    "budget_min": None,
+    "budget_max": None,
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "desktop_notifications": True,
@@ -48,10 +55,9 @@ def load_config():
         raise RuntimeError(f"{CFG.name} deve conter um objeto JSON.")
 
     cfg = {**DEFAULT, **raw}
-    if not isinstance(cfg["keywords_any"], list) or not all(isinstance(x, str) for x in cfg["keywords_any"]):
-        raise RuntimeError("keywords_any deve ser uma lista de textos.")
-    if not isinstance(cfg["exclude_keywords"], list) or not all(isinstance(x, str) for x in cfg["exclude_keywords"]):
-        raise RuntimeError("exclude_keywords deve ser uma lista de textos.")
+    for key in ("keywords_any", "exclude_keywords", "preferred_work_types", "preferred_languages", "preferred_locations"):
+        if not isinstance(cfg[key], list) or not all(isinstance(x, str) for x in cfg[key]):
+            raise RuntimeError(f"{key} deve ser uma lista de textos.")
 
     for key in ("check_every_minutes", "max_results_per_check"):
         value = cfg[key]
@@ -59,6 +65,13 @@ def load_config():
             raise RuntimeError(f"{key} deve ser um número maior ou igual a zero.")
     if cfg["max_results_per_check"] == 0:
         raise RuntimeError("max_results_per_check deve ser maior que zero.")
+
+    for key in ("budget_min", "budget_max"):
+        value = cfg[key]
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+            raise RuntimeError(f"{key} deve ser um número maior ou igual a zero ou nulo.")
+    if cfg["budget_min"] is not None and cfg["budget_max"] is not None and cfg["budget_min"] > cfg["budget_max"]:
+        raise RuntimeError("budget_min não pode ser maior que budget_max.")
 
     for key in ("telegram_bot_token", "telegram_chat_id"):
         if not isinstance(cfg[key], str):
@@ -72,9 +85,9 @@ def save_config(updates):
     """Valida e salva apenas os campos permitidos da configuração."""
     current = load_config()
     allowed = {
-        "check_every_minutes", "max_results_per_check", "keywords_any",
-        "exclude_keywords", "telegram_bot_token", "telegram_chat_id",
-        "desktop_notifications",
+        "check_every_minutes", "max_results_per_check", "keywords_any", "exclude_keywords",
+        "preferred_work_types", "preferred_languages", "preferred_locations", "budget_min", "budget_max",
+        "telegram_bot_token", "telegram_chat_id", "desktop_notifications",
     }
     current.update({key: value for key, value in updates.items() if key in allowed})
     try:
@@ -85,7 +98,7 @@ def save_config(updates):
 
 
 def init_db(connection=None):
-    """Cria a tabela de oportunidades e devolve a conexão usada."""
+    """Cria a tabela e adiciona colunas novas sem apagar bancos existentes."""
     connection = connection or sqlite3.connect(DB)
     connection.execute(
         """CREATE TABLE IF NOT EXISTS jobs(
@@ -95,15 +108,27 @@ def init_db(connection=None):
             company TEXT,
             location TEXT,
             url TEXT NOT NULL,
-            found_at TEXT NOT NULL
+            found_at TEXT NOT NULL,
+            score INTEGER NOT NULL DEFAULT 0,
+            score_level TEXT NOT NULL DEFAULT 'pouca',
+            score_reasons TEXT NOT NULL DEFAULT '[]'
         )"""
     )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+    migrations = {
+        "score": "ALTER TABLE jobs ADD COLUMN score INTEGER NOT NULL DEFAULT 0",
+        "score_level": "ALTER TABLE jobs ADD COLUMN score_level TEXT NOT NULL DEFAULT 'pouca'",
+        "score_reasons": "ALTER TABLE jobs ADD COLUMN score_reasons TEXT NOT NULL DEFAULT '[]'",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            connection.execute(statement)
     connection.commit()
     return connection
 
 
 def fetch_json(url, timeout=20):
-    request = urllib.request.Request(url, headers={"User-Agent": "PabloFreelanceAgent/0.2"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PabloFreelanceAgent/0.3"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -117,7 +142,7 @@ def clean_text(value):
 
 
 def normalize_job(source, item):
-    """Converte o formato de cada fonte para um registro comum."""
+    """Converte o formato de cada fonte para registro comum e metadados disponíveis."""
     if not isinstance(item, dict):
         return None
     if source == "Remotive":
@@ -125,21 +150,23 @@ def normalize_job(source, item):
         title = item.get("title", "")
         company = item.get("company_name", "")
         location = item.get("candidate_required_location", "")
+        metadata = {"budget": item.get("salary"), "job_type": item.get("job_type"), "tags": item.get("tags", [])}
     else:
         job_id = item.get("slug") or item.get("url")
         title = item.get("title", "")
         company = item.get("company_name", "")
         location = item.get("location", "")
+        metadata = {"budget": item.get("salary"), "job_type": item.get("job_types"), "tags": item.get("tags", [])}
 
     url = str(item.get("url") or "").strip()
     if not job_id or not title or not url:
         return None
     description = clean_text(item.get("description", ""))
-    return str(job_id), str(title).strip(), str(company).strip(), str(location).strip(), url, description
+    return str(job_id), str(title).strip(), str(company).strip(), str(location).strip(), url, description, metadata
 
 
 def matching(job, cfg):
-    _, title, _, _, _, description = job
+    _, title, _, _, _, description = job[:6]
     text = f"{title} {description}".casefold()
     keywords = [k.casefold().strip() for k in cfg["keywords_any"] if k.strip()]
     excluded = [k.casefold().strip() for k in cfg["exclude_keywords"] if k.strip()]
@@ -165,20 +192,15 @@ def notify(title, company, location, source, url, cfg):
     if cfg.get("desktop_notifications", True):
         try:
             from plyer import notification
-            notification.notify(
-                title=title[:60],
-                message=f"{company} · {source}",
-                app_name="Pablo Freelance Agent",
-                timeout=10,
-            )
+            notification.notify(title=title[:60], message=f"{company} · {source}", app_name="Pablo Freelance Agent", timeout=10)
         except ImportError:
             pass
-        except Exception as exc:  # bibliotecas de desktop variam por sistema operacional
+        except Exception as exc:
             print("Falha notificação desktop:", exc)
 
 
 def check_once(cfg, connection, fetcher=fetch_json, notifier=notify):
-    """Consulta todas as fontes uma vez e retorna o número de oportunidades novas."""
+    """Consulta todas as fontes, pontua anúncios novos e retorna a quantidade encontrada."""
     found = 0
     limit = int(cfg["max_results_per_check"])
 
@@ -197,12 +219,16 @@ def check_once(cfg, connection, fetcher=fetch_json, notifier=notify):
                 job = normalize_job(source, item)
                 if not job or not matching(job, cfg):
                     continue
-                job_id, title, company, location, link, _ = job
+                job_id, title, company, location, link, _, metadata = job
+                compatibility = score_job(job, cfg, metadata)
                 cursor = connection.execute(
-                    "INSERT OR IGNORE INTO jobs VALUES(?,?,?,?,?,?,?)",
+                    """INSERT OR IGNORE INTO jobs
+                    (id, source, title, company, location, url, found_at, score, score_level, score_reasons)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""",
                     (
                         f"{source}:{job_id}", source, title, company, location, link,
-                        datetime.now(timezone.utc).isoformat(),
+                        datetime.now(timezone.utc).isoformat(), compatibility["score"],
+                        compatibility["level"], json.dumps(compatibility["reasons"], ensure_ascii=False),
                     ),
                 )
                 if cursor.rowcount == 1:

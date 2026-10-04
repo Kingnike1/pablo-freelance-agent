@@ -21,8 +21,11 @@ REQUIRED_FIELDS = (
     "max_results_per_check",
     "keywords_any",
     "exclude_keywords",
+    "preferred_work_types",
     "desktop_notifications",
 )
+
+
 def is_blank(value):
     return value is None or value == "" or value == []
 
@@ -61,6 +64,13 @@ def audit_config():
         lines.append("               O token não será exibido por segurança")
     else:
         lines.append("[OPCIONAL]    Telegram: não configurado")
+    for field in ("preferred_languages", "preferred_locations"):
+        value = config.get(field, [])
+        lines.append(f"[OPCIONAL]    {field}: não configurado" if is_blank(value) else f"[PREENCHIDO]  {field}: {describe(value)}")
+    if config.get("budget_min") is None and config.get("budget_max") is None:
+        lines.append("[OPCIONAL]    faixa de orçamento: não configurada")
+    else:
+        lines.append(f"[PREENCHIDO]  faixa de orçamento: {config.get('budget_min')} a {config.get('budget_max')}")
     lines.append(f"[INFO]        Arquivo: {agent.CFG}")
     lines.append("[INFO]        Para editar: abra config.json ou use o painel web em /config")
 

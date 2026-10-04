@@ -1,6 +1,6 @@
 # Pablo Freelance Agent — descrição do sistema e modelo de melhorias
 
-**Versão documentada:** commit `5bc4ace`  
+**Versão documentada:** implementação de score no commit atual
 **Repositório:** [Kingnike1/pablo-freelance-agent](https://github.com/Kingnike1/pablo-freelance-agent)  
 **Status:** MVP funcional com agente de monitoramento, painel web local, relatórios e diagnóstico de configuração.
 
@@ -58,6 +58,33 @@ O painel permite:
 - abrir os links originais das oportunidades;
 - baixar relatórios nos formatos HTML, CSV e JSON.
 
+### Pontuação de compatibilidade
+
+Arquivo: `scoring.py`
+
+Cada oportunidade recebe uma nota de **0 a 100**, um nível e uma lista de justificativas. A nota considera, quando os dados estão disponíveis:
+
+- correspondência de palavras-chave, com peso maior para termos no título;
+- tipo de trabalho preferido;
+- orçamento dentro da faixa configurada;
+- idioma e localização preferidos;
+- clareza/quantidade da descrição.
+
+Os critérios ausentes são tratados como **não aplicáveis**, e não como uma penalização inventada. Por exemplo, uma vaga sem orçamento recebe a explicação “Orçamento não informado ou sem faixa configurada: não penalizado”.
+
+Faixas exibidas:
+
+| Score | Classificação |
+|---:|---|
+| 80–100 | Alta |
+| 60–79 | Moderada |
+| 40–59 | Baixa |
+| 0–39 | Pouca |
+
+O painel mostra os principais motivos da nota, permite filtrar por score mínimo e ordena as oportunidades da maior para a menor compatibilidade. CSV, JSON e HTML incluem o score e suas justificativas.
+
+> A pontuação é um indicador de aderência ao perfil configurado. Ela não representa qualidade do cliente, probabilidade de contratação ou garantia de resultado.
+
 ### Relatórios
 
 Rotas disponíveis:
@@ -94,6 +121,7 @@ O comando `check` não mostra tokens ou outros valores sensíveis.
 ```text
 pablo_freelance_agent/
 ├── agent.py                         # núcleo do monitoramento e filtros
+├── scoring.py                       # cálculo explicável de compatibilidade
 ├── web_app.py                       # servidor Flask e rotas web/API
 ├── start.py                         # lançador e diagnóstico de configuração
 ├── config.json                      # configuração do usuário
@@ -104,6 +132,7 @@ pablo_freelance_agent/
 │   ├── config.html                  # tela de configuração
 │   └── report.html                  # relatório HTML imprimível
 ├── test_agent.py                    # testes do núcleo
+├── test_scoring.py                  # testes do score
 ├── test_web.py                      # testes da interface e relatórios
 ├── test_start.py                    # testes do lançador e diagnóstico
 ├── README.md                        # instruções rápidas
@@ -124,9 +153,10 @@ O arquivo `opportunities.sqlite3` é criado automaticamente e não deve ser envi
 5. Título e descrição são comparados com os filtros
 6. Termos excluídos removem anúncios incompatíveis
 7. O SQLite verifica se a oportunidade já foi registrada
-8. Novas oportunidades são salvas
-9. O resultado é exibido no terminal, painel ou relatório
-10. O ciclo se repete após o intervalo configurado
+8. A oportunidade nova recebe score, nível e justificativas
+9. Novas oportunidades são salvas
+10. O resultado é exibido no terminal, painel ou relatório
+11. O ciclo se repete após o intervalo configurado
 ```
 
 ---
@@ -141,6 +171,10 @@ Arquivo: `config.json`
 | `max_results_per_check` | Máximo de novas vagas por ciclo | `15` |
 | `keywords_any` | Termos que tornam a vaga elegível | 12 termos |
 | `exclude_keywords` | Termos que eliminam a vaga | 4 termos |
+| `preferred_work_types` | Tipos de trabalho que influenciam o score | 5 termos |
+| `preferred_languages` | Idiomas preferidos | vazio/opcional |
+| `preferred_locations` | Localizações preferidas | vazio/opcional |
+| `budget_min` / `budget_max` | Faixa de orçamento preferencial | nulo/opcional |
 | `telegram_bot_token` | Token do bot Telegram | vazio/opcional |
 | `telegram_chat_id` | Destino das mensagens Telegram | vazio/opcional |
 | `desktop_notifications` | Alertas no computador | `true` |
@@ -193,7 +227,7 @@ python3 -m unittest -v
 
 Validações já realizadas:
 
-- **10 testes automatizados aprovados**.
+- **13 testes automatizados aprovados**.
 - Compilação dos módulos Python aprovada.
 - APIs públicas verificadas com resposta JSON válida.
 - Painel web validado com HTTP 200.
@@ -207,9 +241,9 @@ Validações já realizadas:
 
 1. O sistema depende da disponibilidade e do formato das APIs públicas.
 2. Não há garantia de que todas as vagas disponíveis sejam encontradas.
-3. O filtro atual usa correspondência simples de texto, sem pontuação de compatibilidade.
+3. A pontuação usa regras explícitas de texto; ainda não utiliza modelos semânticos ou aprendizado com histórico de contratações.
 4. O sistema não diferencia perfeitamente freelance, emprego fixo, contrato e projeto pontual.
-5. Não existem filtros específicos por orçamento, moeda, idioma ou país.
+5. A faixa de orçamento, idioma e localização depende dos dados que cada fonte publica e atualmente não há conversão entre moedas.
 6. O painel é local e não possui autenticação.
 7. O banco SQLite é local e não possui sincronização entre computadores.
 8. Não há histórico de status como `nova`, `revisada`, `favorita`, `candidatada` ou `descartada`.
@@ -284,18 +318,20 @@ Pessoa que busca trabalhos freelance ou remotos em desenvolvimento web e Python.
 - O relatório CSV inclui uma coluna `score`.
 
 ## Arquivos ou áreas envolvidas
-- `agent.py` — cálculo da pontuação durante a normalização.
+- `scoring.py` — cálculo explicável da pontuação.
+- `agent.py` — aplicação do score e persistência durante a normalização.
 - `web_app.py` — ordenação e filtro por pontuação.
 - `templates/index.html` — exibição visual do score.
-- `test_agent.py` — testes do cálculo.
+- `test_scoring.py` — testes do cálculo.
+- `test_agent.py` — testes de integração com o núcleo.
 - `test_web.py` — teste de ordenação no painel.
 
 ## Critérios de aceitação
-- [ ] Toda nova vaga recebe uma pontuação entre 0 e 100.
-- [ ] Uma vaga com termo no título pontua acima de uma vaga com o mesmo termo apenas na descrição.
-- [ ] O filtro por termos excluídos continua funcionando.
-- [ ] O score aparece no painel e nos relatórios.
-- [ ] Os testes antigos continuam passando.
+- [x] Toda nova vaga recebe uma pontuação entre 0 e 100.
+- [x] Uma vaga com termo no título pontua acima de uma vaga com o mesmo termo apenas na descrição.
+- [x] O filtro por termos excluídos continua funcionando.
+- [x] O score aparece no painel e nos relatórios.
+- [x] Os testes antigos continuam passando.
 
 ## Riscos e cuidados
 - A pontuação é uma indicação, não uma garantia de qualidade.
@@ -303,17 +339,17 @@ Pessoa que busca trabalhos freelance ou remotos em desenvolvimento web e Python.
 - Nenhum dado privado deve ser enviado para serviços externos.
 
 ## Testes necessários
-- Testar vaga sem palavras-chave.
-- Testar vaga com termo no título.
-- Testar vaga com vários termos.
-- Testar vaga com termo excluído.
-- Testar relatório CSV com a nova coluna.
+- [x] Testar vaga sem orçamento informado sem inventar ou penalizar o valor.
+- [x] Testar vaga com termo no título.
+- [x] Testar vaga com vários termos.
+- [x] Testar vaga com termo excluído.
+- [x] Testar relatório CSV com score e justificativas.
 
 ## Status
 - [x] Planejada
-- [ ] Em desenvolvimento
-- [ ] Testada
-- [ ] Publicada no GitHub
+- [x] Em desenvolvimento
+- [x] Testada
+- [x] Publicada no GitHub
 ```
 
 ---
@@ -323,24 +359,22 @@ Pessoa que busca trabalhos freelance ou remotos em desenvolvimento web e Python.
 ### Prioridade alta
 
 1. **Persistência de status das vagas**: favorita, revisada, descartada e candidata.
-2. **Pontuação de compatibilidade** para ordenar as melhores oportunidades.
-3. **Filtros por país, idioma, orçamento e tipo de contrato**.
-4. **Melhor tratamento de falhas de API**, incluindo registro de logs e retentativas controladas.
-
+2. **Filtros por país, idioma, orçamento e tipo de contrato**, ampliando o score atual.
+3. **Melhor tratamento de falhas de API**, incluindo registro de logs e retentativas controladas.
 ### Prioridade média
 
-5. Histórico de consultas e quantidade de vagas por fonte.
-6. Exportação de relatórios com resumo e estatísticas.
-7. Configuração de fontes diretamente pelo painel.
-8. Paginação e ordenação avançada no painel.
-9. Backup e restauração do banco SQLite.
+4. Histórico de consultas e quantidade de vagas por fonte.
+5. Exportação de relatórios com resumo e estatísticas.
+6. Configuração de fontes diretamente pelo painel.
+7. Paginação e ordenação avançada no painel.
+8. Backup e restauração do banco SQLite.
 
 ### Prioridade baixa
 
-10. Autenticação para acesso remoto seguro.
-11. Serviço para iniciar automaticamente com o sistema operacional.
-12. Integração com novas fontes, respeitando os termos de uso.
-13. Rascunhos de propostas personalizados, sempre exigindo revisão manual.
+9. Autenticação para acesso remoto seguro.
+10. Serviço para iniciar automaticamente com o sistema operacional.
+11. Integração com novas fontes, respeitando os termos de uso.
+12. Rascunhos de propostas personalizados, sempre exigindo revisão manual.
 
 ---
 

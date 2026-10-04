@@ -33,7 +33,11 @@ O painel permite:
 - filtrar por fonte e localização;
 - disparar uma atualização manual sem enviar notificações duplicadas;
 - editar palavras-chave, termos excluídos e opções de notificação;
+- configurar tipos de trabalho, idiomas, localização e faixa de orçamento para o score;
+- ordenar e filtrar oportunidades por compatibilidade;
 - abrir ou baixar relatórios HTML, CSV e JSON respeitando os filtros atuais.
+
+Cada vaga nova recebe um score de compatibilidade entre 0 e 100. O painel mostra os motivos da classificação e os relatórios incluem `score`, `score_level` e `score_reasons`. Dados ausentes, como orçamento não informado, não são inventados nem penalizam a vaga automaticamente.
 
 O painel é local por padrão e não deve ser exposto diretamente à internet sem autenticação e uma camada de servidor adequada.
 
@@ -56,7 +60,8 @@ python -m unittest -v
 - Normalização defensiva de anúncios incompletos e limpeza de entidades HTML.
 - Limite de vagas aplicado ao total da busca, e não apenas a uma fonte.
 - Uma única conexão SQLite por execução, com commit por consulta.
-- Testes para filtros, deduplicação, limite global e configuração parcial.
+- Pontuação explicável de compatibilidade com migração automática do SQLite.
+- Testes para filtros, deduplicação, limite global, score e configuração parcial.
 
 ## Limitações
 

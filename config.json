@@ -21,6 +21,17 @@
     "lead developer",
     "principal"
   ],
+  "preferred_work_types": [
+    "frontend",
+    "backend",
+    "website",
+    "landing page",
+    "automation"
+  ],
+  "preferred_languages": [],
+  "preferred_locations": [],
+  "budget_min": null,
+  "budget_max": null,
   "telegram_bot_token": "",
   "telegram_chat_id": "",
   "desktop_notifications": true

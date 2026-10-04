@@ -19,8 +19,8 @@ class WebAppTests(unittest.TestCase):
             with sqlite3.connect(self.db) as connection:
                 agent.init_db(connection)
                 connection.execute(
-                    "INSERT INTO jobs VALUES(?,?,?,?,?,?,?)",
-                    ("Remotive:1", "Remotive", "Python developer", "Acme", "Remote", "https://example.com/1", "2026-10-03T20:00:00+00:00"),
+                    "INSERT INTO jobs (id, source, title, company, location, url, found_at, score, score_level, score_reasons) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    ("Remotive:1", "Remotive", "Python developer", "Acme", "Remote", "https://example.com/1", "2026-10-03T20:00:00+00:00", 82, "alta", '["Termo no título"]'),
                 )
         self.patches = [patch.object(agent, "DB", self.db), patch.object(agent, "CFG", self.config)]
         for item in self.patches:
