@@ -1,0 +1,27 @@
+{
+  "check_every_minutes": 30,
+  "max_results_per_check": 15,
+  "keywords_any": [
+    "frontend",
+    "front-end",
+    "html",
+    "css",
+    "javascript",
+    "react",
+    "python",
+    "web developer",
+    "website",
+    "landing page",
+    "bug fix",
+    "wordpress"
+  ],
+  "exclude_keywords": [
+    "senior",
+    "staff engineer",
+    "lead developer",
+    "principal"
+  ],
+  "telegram_bot_token": "",
+  "telegram_chat_id": "",
+  "desktop_notifications": true
+}
