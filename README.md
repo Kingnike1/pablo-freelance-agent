@@ -10,6 +10,18 @@ Monitora duas fontes públicas de vagas remotas, filtra por palavras-chave, evit
 4. Para usar o agente no terminal, execute: `py agent.py`.
 5. Para abrir o painel web local, execute: `py web_app.py` e acesse <http://127.0.0.1:5000>.
 
+## Execução simplificada
+
+Também é possível usar um único arquivo:
+
+```bash
+python start.py          # abre o painel web (padrão)
+python start.py check    # mostra o que está preenchido ou faltando
+python start.py agent    # inicia o monitor no terminal
+```
+
+O comando `check` não mostra o token do Telegram. Ele identifica campos obrigatórios, avisa quando o Telegram está incompleto e informa onde editar a configuração.
+
 No Linux/macOS, substitua `py` por `python3`. Edite `config.json` para ajustar palavras-chave e frequência. O padrão é 30 minutos. Deixe o computador ligado e o programa aberto.
 
 ## Painel web
